@@ -1,0 +1,83 @@
+name: Deploy to server with ssh
+description: Deploy app in staging/prod server via ssh
+inputs:
+  ssh_user:
+    description: User to connect to server
+    required: true
+  ssh_host:
+    description: Host to connect to server
+    required: true
+  ssh_port:
+    description: Port to connect to server
+    required: false
+    default: '22'
+  ssh_key:
+    description: ssh key to connect to server
+    required: true
+  repo_path:
+    description: Path to repo
+    required: true
+  main_branch:
+    description: Main branch to deploy
+    required: false
+    default: dev
+  ssh_agent_sock:
+    description: socket path for ssh-agent
+    required: false
+    default: /tmp/ssh_agent.sock
+  script_name:
+    description: Name of the script to execute
+    required: true
+  supervisor_process_name:
+    description: Name of the supervisor process
+    required: true
+    default: ${{ github.event.repository.name }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup ssh config and ssh-agent
+      run: |
+        mkdir -p ~/.ssh/
+        cat << EOF >  ~/.ssh/config
+        Host staging
+          HostName ${{ inputs.ssh_host }}
+          User ${{ inputs.ssh_user }}
+          Port ${{ inputs.ssh_port }}
+          ForwardAgent yes
+          StrictHostKeyChecking no
+        EOF
+        ssh-agent -a $SSH_AUTH_SOCK > /dev/null
+        ssh-add - <<< "${{ inputs.ssh_key }}"
+      shell: bash
+      env:
+        SSH_AUTH_SOCK: ${{ inputs.ssh_agent_sock }}
+
+  
+    - name: Add know hosts
+      run: |
+        ssh-keyscan -H "${{ inputs.ssh_host }}" >> ~/.ssh/known_hosts
+        ssh-keyscan github.com >> ~/.ssh/known_hosts
+      shell: bash
+
+    - name: Pulling updates from repo
+      run: |
+        ssh staging "
+        cd ${{ inputs.repo_path }}
+        git switch ${{ inputs.main_branch }}
+        git pull origin ${{ inputs.main_branch }}
+        "
+      shell: bash
+      env:
+        SSH_AUTH_SOCK: ${{ inputs.ssh_agent_sock }}
+
+    - name: Deploy
+      run: |
+        ssh staging "
+        export PROCESS_NAME=${{ inputs.supervisor_process_name }}
+        cd ${{ inputs.repo_path }}
+        bash ${{ inputs.script_name }}
+        "
+      shell: bash
+      env:
+        SSH_AUTH_SOCK: ${{ inputs.ssh_agent_sock }}
